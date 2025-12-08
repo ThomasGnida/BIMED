@@ -5,6 +5,7 @@
 #include "MAX30105.h"
 #include "heartRate.h"
 #include "spo2_algorithm.h"
+#include <math.h>
 
 #define TFT_CS D3
 #define TFT_RST D2
@@ -16,9 +17,10 @@ Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
 // --- MAX30102 PINS on I2C1 (SDA=D4, SCL=D5) ---
 MAX30105 HRSensor;
 TwoWire myWire(&i2c1_inst, D4, D5);
-static float lastDistance = 0.0;
-static float currentDistance = 0.0;
-static unsigned long lastMeasurementTime = 0;
+float lastDistance = 0.0;
+float currentDistance = 0.0;
+unsigned long lastMeasurementTime = 0;
+float total_distance = 0.0;
 
 // SpO2 and HR calculation constants
 const byte RATE_SIZE = 4;
@@ -28,6 +30,7 @@ long lastBeat = 0;
 float beatsPerMinute;
 int beatAvg;
 static uint8_t i = 0;
+static float currentSpeed = 0.0;
 
 // SpO2 calculation buffers
 #define BUFFER_LENGTH 100
@@ -37,6 +40,7 @@ int32_t spo2;
 int8_t validSPO2;
 int32_t heartRate;
 int8_t validHeartRate;
+boolean valid_reading = false;
 
 float measureDistance() {
   digitalWrite(TRIG_PIN, LOW);
@@ -61,10 +65,83 @@ float measureSpeed(float oldDistance, float newDistance, float secondsInterval) 
 }
 
 
-void measureSPO2(uint8_t current_index) {
-    redBuffer[current_index] = HRSensor.getRed();
-    irBuffer[current_index] = HRSensor.getIR();
-    HRSensor.nextSample();
+void valid_spo2_measured(uint8_t current_index) {
+  redBuffer[current_index] = HRSensor.getIR();
+  irBuffer[current_index] = HRSensor.getRed();
+  HRSensor.nextSample();
+}
+
+void updateDisplay() {
+    static unsigned long lastDisplayUpdate = 0;
+
+    if (millis() - lastDisplayUpdate < 200) {  // Update display every 200ms (5 Hz) instead of 1 second
+        return;
+    }
+    Serial.print("Current Time: ");
+    Serial.print(millis());
+
+    lastDisplayUpdate = millis();
+
+    tft.fillScreen(ST77XX_BLACK);
+    tft.setTextSize(2);
+    tft.setTextColor(ST77XX_WHITE);
+
+    // Display HR and SpO2
+    if (validSPO2 && validHeartRate) {
+        tft.setCursor(10, 20);
+        tft.print("  HR: ");
+        tft.print(heartRate);
+        tft.println(" bpm");
+
+        tft.setCursor(10, 50);
+        tft.print("SpO2: ");
+        tft.print(spo2);
+        tft.println(" %");
+
+        Serial.print(", HR: ");
+        Serial.print(heartRate);
+        Serial.print(" bpm, SpO2: ");
+        Serial.print(spo2);
+        Serial.print("%");
+    } else {
+        tft.setCursor(10, 20);
+        tft.println("Place finger");
+        Serial.print(", No finger");
+    }
+
+    // Display Distance
+    tft.setCursor(10, 100);
+    if (currentDistance >= 0) {
+        tft.print("Dist: ");
+        tft.print(currentDistance, 1);
+        tft.println(" cm");
+
+        Serial.print(", Dist: ");
+        Serial.print(currentDistance, 1);
+        Serial.print(" cm");
+    } else {
+        tft.println("Dist: --");
+        Serial.print(", Dist: --");
+    }
+
+    // Display Speed
+    tft.setCursor(10, 130);
+    tft.print("Speed: ");
+    tft.print(currentSpeed, 1);
+    tft.println(" cm/s");
+
+    Serial.print(", Speed: ");
+    Serial.print(currentSpeed, 1);
+    Serial.print(" cm/s");
+
+    tft.setCursor(10, 160);
+    tft.print("Total Dist: ");
+    tft.print(total_distance, 2); // convert to meters
+    tft.println(" cm");
+
+    Serial.print(", Total Dist: ");
+    Serial.print(total_distance, 2);
+    Serial.println(" cm");
 }
 
 void setup() {
@@ -99,23 +176,35 @@ void setup() {
   pinMode(TRIG_PIN, OUTPUT);
   digitalWrite(TRIG_PIN, LOW);
 
-  // initialize timing for speed calculation
   lastMeasurementTime = millis();
 }
 
 void loop() {
-    measureSPO2(i);
-    if(i == BUFFER_LENGTH -1) {
-        i = 0;
-        maxim_heart_rate_and_oxygen_saturation(irBuffer, BUFFER_LENGTH, redBuffer, &spo2, &validSPO2, &heartRate, &validHeartRate);
-        Serial.println("HR:" + String(heartRate));
-        Serial.println("SPO2" + String(spo2));
-    } else {
-        i++;
+  if(i == BUFFER_LENGTH) {
+      i = 0;
+      valid_spo2_measured(i);
+      maxim_heart_rate_and_oxygen_saturation(irBuffer, BUFFER_LENGTH, redBuffer, &spo2, &validSPO2, &heartRate, &validHeartRate);
+      Serial.println(spo2);
+      Serial.println(heartRate);
+  } else {
+      valid_spo2_measured(i);
+      i++;
+  }
+
+  unsigned long currentTime = millis();
+  float newDistance = measureDistance();
+  
+  if (newDistance >= 0.0) {
+    float dt = (currentTime - lastMeasurementTime) / 1000.0;
+    currentSpeed = measureSpeed(lastDistance, newDistance, dt);
+    float delta = sqrt((newDistance - lastDistance)*(newDistance - lastDistance));
+    if (delta > 1) { //Only update reasonable thresholds
+      total_distance += delta; 
     }
-    unsigned long currentTime = millis();
     lastDistance = currentDistance;
-    currentDistance = measureDistance();
-    Serial.println("Distance (cm): " + String(currentDistance) + " | Speed (cm/s): " + String(measureSpeed(lastDistance, currentDistance, (currentTime - lastMeasurementTime) / 1000.0)) );
+    currentDistance = newDistance;
     lastMeasurementTime = currentTime;
+  }
+
+  updateDisplay();
 }
