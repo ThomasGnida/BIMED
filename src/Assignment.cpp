@@ -16,6 +16,9 @@ Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
 // --- MAX30102 PINS on I2C1 (SDA=D4, SCL=D5) ---
 MAX30105 HRSensor;
 TwoWire myWire(&i2c1_inst, D4, D5);
+static uint16_t lastDistance = 0;
+static uint16_t currentDistance = 0;
+static uint16_t lastMeasurementTime = 0;
 
 // SpO2 and HR calculation constants
 const byte RATE_SIZE = 4;
@@ -34,8 +37,44 @@ int8_t validSPO2;
 int32_t heartRate;
 int8_t validHeartRate;
 
+float measureDistance() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+  
+  uint32_t duration = pulseIn(ECHO_PIN, HIGH, 1000);
+  if (duration == 0){
+    return -1; // Indicate timeout or no reading
+  }
+  float distance_cm = duration * 0.0343 / 2; //cm/us divided by 2 for go and return
+  return distance_cm;
+}
+
+float measureSpeed(float oldDistance, float newDistance, float secondsInterval) {
+  if (secondsInterval <= 0) {
+    return 0; // Prevent division by zero
+  }
+  return (newDistance - oldDistance) / secondsInterval; // cm/s positive values = approaching, negative = receding
+}
 
 void setup() {
+    static bool initialized = false;
+
+    if (!initialized) {
+        myWire.begin();
+        if (!HRSensor.begin(myWire, I2C_SPEED_STANDARD)) {
+            tft.fillScreen(ST77XX_BLACK);
+            tft.setCursor(0, 0);
+            tft.println("MAX30102 not found!");
+            while (1);
+        }
+        HRSensor.setup(60, 4, 2, 100, 411, 4096);
+        HRSensor.setPulseAmplitudeRed(0x0A);
+        HRSensor.setPulseAmplitudeGreen(0);
+        initialized = true;
+    }
     Serial.begin(115200);
     delay(3000);
     Serial.println("Initializing modules...");
@@ -52,73 +91,26 @@ void setup() {
     pinMode(TRIG_PIN, OUTPUT);
 }
 
-void measureSPO2() {
-    static bool initialized = false;
-    static unsigned long lastDisplayUpdate = 0;
-
-    if (!initialized) {
-        myWire.begin();
-        if (!HRSensor.begin(myWire, I2C_SPEED_STANDARD)) {
-            tft.fillScreen(ST77XX_BLACK);
-            tft.setCursor(0, 0);
-            tft.println("MAX30102 not found!");
-            while (1);
-        }
-        HRSensor.setup(0x1F, 4, 2, 400, 411, 4096); // Configure sensor with 6.4mA power, 4 sample average, Red+IR mode, 400 samples/sec, 411uS pulse width, 4096nA ADC range.
-        HRSensor.setPulseAmplitudeRed(0x0A); // Turn Red LED to low to indicate sensor is running
-        HRSensor.setPulseAmplitudeIR(0x1F); // Set IR LED to a higher power
-        initialized = true;
-    }
-
-    // Continuously read sensor data
-    for (byte i = 0; i < BUFFER_LENGTH; i++) {
-        while (!HRSensor.available()) {
-            HRSensor.check();
-        }
-        redBuffer[i] = HRSensor.getRed();
-        irBuffer[i] = HRSensor.getIR();
-        HRSensor.nextSample();
-    }
-
-    // Calculate heart rate and SpO2
-    maxim_heart_rate_and_oxygen_saturation(irBuffer, BUFFER_LENGTH, redBuffer, &spo2, &validSPO2, &heartRate, &validHeartRate);
-
-    // Display results
-    if (validSPO2 && validHeartRate) {
-        if (millis() - lastDisplayUpdate > 1000) { // Update every second
-            tft.fillScreen(ST77XX_BLACK);
-            tft.setCursor(10, 80);
-            tft.setTextSize(3);
-            tft.setTextColor(ST77XX_WHITE);
-            tft.print("HR: ");
-            tft.println(heartRate);
-            tft.setCursor(10, 120);
-            tft.print("SpO2: ");
-            tft.println(spo2);
-            lastDisplayUpdate = millis();
-
-            Serial.print("HR: ");
-            Serial.print(heartRate);
-            Serial.print(", SpO2: ");
-            Serial.println(spo2);
-        }
-    } else {
-        if (millis() - lastDisplayUpdate > 500) {
-            tft.fillScreen(ST77XX_BLACK);
-            tft.setCursor(10, 100);
-            tft.setTextSize(2);
-            tft.setTextColor(ST77XX_WHITE);
-            tft.println("Place finger");
-            lastDisplayUpdate = millis();
-            Serial.println("No finger or invalid data");
-        }
-    }
-
+void measureSPO2(uint8_t current_index) {
+    redBuffer[current_index] = HRSensor.getRed();
+    irBuffer[current_index] = HRSensor.getIR();
+    HRSensor.nextSample();
 }
 
-
+static uint8_t index = 0;
 void loop() {
-
-    measureSPO2();
-    delay(50);
+    measureSPO2(index);
+    if(index == BUFFER_LENGTH -1) {
+        index = 0;
+        maxim_heart_rate_and_oxygen_saturation(irBuffer, BUFFER_LENGTH, redBuffer, &spo2, &validSPO2, &heartRate, &validHeartRate);
+        Serial.println("HR:" + String(heartRate));
+        Serial.println("SPO2" + String(spo2));
+    } else {
+        index++;
+    }
+    unsigned long currentTime = millis();
+    lastDistance = currentDistance;
+    currentDistance = measureDistance();
+    Serial.print("Distance (cm): " + String(currentDistance) + " | Speed (cm/s): " + String(measureSpeed(lastDistance, currentDistance, (currentTime - lastMeasurementTime) / 1000.0)) );
+    lastMeasurementTime = currentTime;
 }
