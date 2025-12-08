@@ -64,15 +64,45 @@ void measureSPO2() {
             tft.println("MAX30102 not found!");
             while (1);
         }
-        HRSensor.setup(60, 4, 2, 100, 411, 4096);
-        HRSensor.setPulseAmplitudeRed(0x0A);
-        HRSensor.setPulseAmplitudeGreen(0);
+        HRSensor.setup(0x1F, 4, 2, 400, 411, 4096); // Configure sensor with 6.4mA power, 4 sample average, Red+IR mode, 400 samples/sec, 411uS pulse width, 4096nA ADC range.
+        HRSensor.setPulseAmplitudeRed(0x0A); // Turn Red LED to low to indicate sensor is running
+        HRSensor.setPulseAmplitudeIR(0x1F); // Set IR LED to a higher power
         initialized = true;
     }
 
-    long irValue = HRSensor.getIR();
+    // Continuously read sensor data
+    for (byte i = 0; i < BUFFER_LENGTH; i++) {
+        while (!HRSensor.available()) {
+            HRSensor.check();
+        }
+        redBuffer[i] = HRSensor.getRed();
+        irBuffer[i] = HRSensor.getIR();
+        HRSensor.nextSample();
+    }
 
-    if (irValue < 50000) {
+    // Calculate heart rate and SpO2
+    maxim_heart_rate_and_oxygen_saturation(irBuffer, BUFFER_LENGTH, redBuffer, &spo2, &validSPO2, &heartRate, &validHeartRate);
+
+    // Display results
+    if (validSPO2 && validHeartRate) {
+        if (millis() - lastDisplayUpdate > 1000) { // Update every second
+            tft.fillScreen(ST77XX_BLACK);
+            tft.setCursor(10, 80);
+            tft.setTextSize(3);
+            tft.setTextColor(ST77XX_WHITE);
+            tft.print("HR: ");
+            tft.println(heartRate);
+            tft.setCursor(10, 120);
+            tft.print("SpO2: ");
+            tft.println(spo2);
+            lastDisplayUpdate = millis();
+
+            Serial.print("HR: ");
+            Serial.print(heartRate);
+            Serial.print(", SpO2: ");
+            Serial.println(spo2);
+        }
+    } else {
         if (millis() - lastDisplayUpdate > 500) {
             tft.fillScreen(ST77XX_BLACK);
             tft.setCursor(10, 100);
@@ -80,25 +110,9 @@ void measureSPO2() {
             tft.setTextColor(ST77XX_WHITE);
             tft.println("Place finger");
             lastDisplayUpdate = millis();
-            Serial.println("No finger detected");
+            Serial.println("No finger or invalid data");
         }
     }
-
-    for (byte i = 0; i < BUFFER_LENGTH; i++) {
-
-        while (!HRSensor.available()) {
-            HRSensor.check();
-        }
-        redBuffer[i] = HRSensor.getRed();
-        //Serial.println(HRSensor.getRed());
-        irBuffer[i] = HRSensor.getIR();
-        //Serial.println(HRSensor.getIR());
-        HRSensor.nextSample();
-    }
-
-    maxim_heart_rate_and_oxygen_saturation(irBuffer, BUFFER_LENGTH, redBuffer, &spo2, &validSPO2, &heartRate, &validHeartRate);
-    Serial.println("HR:" + String(heartRate));
-    Serial.println("SPO2" + String(spo2));
 
 }
 
@@ -106,5 +120,5 @@ void measureSPO2() {
 void loop() {
 
     measureSPO2();
-    delay(100);
+    delay(50);
 }
