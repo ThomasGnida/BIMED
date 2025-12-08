@@ -11,36 +11,36 @@
 #define TFT_RST D2
 #define TFT_DC D7
 Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
+
 // --- Ultrasonic Pins ---
 #define ECHO_PIN D0
 #define TRIG_PIN D1
+
 // --- MAX30102 PINS on I2C1 (SDA=D4, SCL=D5) ---
 MAX30105 HRSensor;
 TwoWire myWire(&i2c1_inst, D4, D5);
+
+// Distance tracking
 float lastDistance = 0.0;
 float currentDistance = 0.0;
 unsigned long lastMeasurementTime = 0;
 float total_distance = 0.0;
+float currentSpeed = 0.0;
 
-// SpO2 and HR calculation constants
-const byte RATE_SIZE = 4;
-byte rates[RATE_SIZE];
-byte rateSpot = 0;
-long lastBeat = 0;
-float beatsPerMinute;
-int beatAvg;
-static uint8_t i = 0;
-static float currentSpeed = 0.0;
 
 // SpO2 calculation buffers
 #define BUFFER_LENGTH 100
 uint32_t irBuffer[BUFFER_LENGTH];
 uint32_t redBuffer[BUFFER_LENGTH];
-int32_t spo2;
-int8_t validSPO2;
-int32_t heartRate;
-int8_t validHeartRate;
-boolean valid_reading = false;
+int32_t spo2 = 0;
+int8_t validSPO2 = 0;
+int32_t heartRate = 0;
+int8_t validHeartRate = 0;
+
+uint8_t bufferIndex = 0;
+bool bufferReady = false;
+unsigned long lastSensorRead = 0;
+const unsigned long SENSOR_INTERVAL = 20;
 
 float measureDistance() {
   digitalWrite(TRIG_PIN, LOW);
@@ -65,16 +65,33 @@ float measureSpeed(float oldDistance, float newDistance, float secondsInterval) 
 }
 
 
-void valid_spo2_measured(uint8_t current_index) {
-  redBuffer[current_index] = HRSensor.getIR();
-  irBuffer[current_index] = HRSensor.getRed();
-  HRSensor.nextSample();
+void collectSensorSample() {
+  redBuffer[bufferIndex] = HRSensor.getRed();
+  irBuffer[bufferIndex] = HRSensor.getIR();
+  
+  bufferIndex++;
+
+  if (bufferIndex == BUFFER_LENGTH)  {
+    bufferIndex = 0;
+
+  maxim_heart_rate_and_oxygen_saturation(
+      irBuffer, 
+      BUFFER_LENGTH, 
+      redBuffer, 
+      &spo2, 
+      &validSPO2, 
+      &heartRate, 
+      &validHeartRate
+    );
+  Serial.println("Computed SpO2 and Heart Rate");
+  }
+  HRSensor.nextSample(); 
 }
 
 void updateDisplay() {
     static unsigned long lastDisplayUpdate = 0;
 
-    if (millis() - lastDisplayUpdate < 200) {  // Update display every 200ms (5 Hz) instead of 1 second
+    if (millis() - lastDisplayUpdate < 500) { 
         return;
     }
     Serial.print("Current Time: ");
@@ -177,34 +194,38 @@ void setup() {
   digitalWrite(TRIG_PIN, LOW);
 
   lastMeasurementTime = millis();
+  lastSensorRead = millis();
 }
 
 void loop() {
-  if(i == BUFFER_LENGTH) {
-      i = 0;
-      valid_spo2_measured(i);
-      maxim_heart_rate_and_oxygen_saturation(irBuffer, BUFFER_LENGTH, redBuffer, &spo2, &validSPO2, &heartRate, &validHeartRate);
-      Serial.println(spo2);
-      Serial.println(heartRate);
-  } else {
-      valid_spo2_measured(i);
-      i++;
-  }
-
-  unsigned long currentTime = millis();
-  float newDistance = measureDistance();
+  unsigned long currentTime = millis();  
+  collectSensorSample();
   
-  if (newDistance >= 0.0) {
-    float dt = (currentTime - lastMeasurementTime) / 1000.0;
-    currentSpeed = measureSpeed(lastDistance, newDistance, dt);
-    float delta = sqrt((newDistance - lastDistance)*(newDistance - lastDistance));
-    if (delta > 1) { //Only update reasonable thresholds
-      total_distance += delta; 
+  static unsigned long lastDistanceRead = 0;
+  if (currentTime - lastDistanceRead >= 50) { // Every 100ms
+    lastDistanceRead = currentTime;
+    
+    float newDistance = measureDistance();
+    
+    if (newDistance >= 0.0) {
+      float dt = (currentTime - lastMeasurementTime) / 1000.0;
+      
+      if (dt > 0) {
+        currentSpeed = measureSpeed(currentDistance, newDistance, dt);
+        float delta = abs(newDistance - currentDistance);
+        
+        // Only update if change is significant (noise filtering)
+        if (delta > 0.5 && delta < 100) { // Ignore noise and unrealistic jumps
+          total_distance += delta;
+        }
+      }
+      
+      lastDistance = currentDistance;
+      currentDistance = newDistance;
+      lastMeasurementTime = currentTime;
     }
-    lastDistance = currentDistance;
-    currentDistance = newDistance;
-    lastMeasurementTime = currentTime;
   }
-
+  
+  // Update display
   updateDisplay();
 }
