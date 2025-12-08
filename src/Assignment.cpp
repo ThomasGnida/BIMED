@@ -23,6 +23,7 @@ TwoWire myWire(&i2c1_inst, D4, D5);
 // Distance tracking
 float lastDistance = 0.0;
 float currentDistance = 0.0;
+static unsigned long lastDistanceRead = 0;
 unsigned long lastMeasurementTime = 0;
 float total_distance = 0.0;
 float currentSpeed = 0.0;
@@ -182,8 +183,8 @@ void setup() {
       tft.println("MAX30102 not found!");
       while (1);
     }
-    HRSensor.setup(0x1F, 4, 2, 100, 411, 4096);
-    HRSensor.setPulseAmplitudeRed(0x0A);
+    HRSensor.setup(0x2F, 4, 2, 100, 411, 4096);
+    HRSensor.setPulseAmplitudeRed(0x1A);
     HRSensor.setPulseAmplitudeGreen(0);
     initialized = true;
   }
@@ -201,8 +202,7 @@ void loop() {
   unsigned long currentTime = millis();  
   collectSensorSample();
   
-  static unsigned long lastDistanceRead = 0;
-  if (currentTime - lastDistanceRead >= 50) { // Every 100ms
+  if (currentTime - lastDistanceRead >= 50) { // Every 50ms
     lastDistanceRead = currentTime;
     
     float newDistance = measureDistance();
