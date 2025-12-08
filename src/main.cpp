@@ -1,4 +1,4 @@
-#include <Adafruit_GFX.h>
+/*#include <Adafruit_GFX.h>
 #include <Adafruit_ST7789.h>
 #include <SPI.h>
 #include <Wire.h>
@@ -8,7 +8,7 @@
 /*
     If everything works as it should, the display should display which sensors are operational or not.
     The same information should be shown in the serial monitor as well @115200 baud.
-*/
+#1#
 // If wired identical to the image in the moodle course, these pin definitions are correct.
 // Otherwise, adapt as neccessary.
 #define TFT_CS D3
@@ -81,4 +81,4 @@ void setup() {
 void loop() {
 
   delay(1);
-}
+}*/
