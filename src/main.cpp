@@ -21,9 +21,9 @@ Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
 // --- MAX30102 PINS on I2C1 (SDA=D4, SCL=D5) ---
 MAX30105 HRSensor;
 TwoWire myWire(&i2c1_inst, D4, D5);
-static uint16_t lastDistance = 0;
-static uint16_t currentDistance = 0;
-static uint16_t lastMeasurementTime = 0;
+static float lastDistance = 0;
+static float currentDistance = 0;
+static float lastMeasurementTime = 0;
 
 
 
@@ -31,6 +31,8 @@ void setup() {
   Serial.begin(115200);
   delay(3000);
   Serial.println("Initializing modules...");
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
 }
 float measureDistance() {
   digitalWrite(TRIG_PIN, LOW);
@@ -59,8 +61,8 @@ void loop() {
   unsigned long currentTime = millis();
   lastDistance = currentDistance;
   currentDistance = measureDistance();
-  Serial.print("Distance (cm): " + String(currentDistance) + " | Speed (cm/s): " + String(measureSpeed(lastDistance, currentDistance, (currentTime - lastMeasurementTime) / 1000.0)) );
+  Serial.println("Distance (cm): " + String(currentDistance) + " | Speed (cm/s): " + String(measureSpeed(lastDistance, currentDistance, (currentTime - lastMeasurementTime) / 1000.0)) );
   lastMeasurementTime = currentTime;
 
-  delay(1);
+  delay(60);
 }
