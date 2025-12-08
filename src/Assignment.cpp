@@ -16,9 +16,9 @@ Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
 // --- MAX30102 PINS on I2C1 (SDA=D4, SCL=D5) ---
 MAX30105 HRSensor;
 TwoWire myWire(&i2c1_inst, D4, D5);
-static uint16_t lastDistance = 0;
-static uint16_t currentDistance = 0;
-static uint16_t lastMeasurementTime = 0;
+static float lastDistance = 0.0;
+static float currentDistance = 0.0;
+static unsigned long lastMeasurementTime = 0;
 
 // SpO2 and HR calculation constants
 const byte RATE_SIZE = 4;
@@ -27,6 +27,7 @@ byte rateSpot = 0;
 long lastBeat = 0;
 float beatsPerMinute;
 int beatAvg;
+static uint8_t i = 0;
 
 // SpO2 calculation buffers
 #define BUFFER_LENGTH 100
@@ -44,7 +45,7 @@ float measureDistance() {
   delayMicroseconds(10);
   digitalWrite(TRIG_PIN, LOW);
   
-  uint32_t duration = pulseIn(ECHO_PIN, HIGH, 1000);
+  uint32_t duration = pulseIn(ECHO_PIN, HIGH, 30000);
   if (duration == 0){
     return -1; // Indicate timeout or no reading
   }
@@ -59,37 +60,6 @@ float measureSpeed(float oldDistance, float newDistance, float secondsInterval) 
   return (newDistance - oldDistance) / secondsInterval; // cm/s positive values = approaching, negative = receding
 }
 
-void setup() {
-    static bool initialized = false;
-
-    if (!initialized) {
-        myWire.begin();
-        if (!HRSensor.begin(myWire, I2C_SPEED_STANDARD)) {
-            tft.fillScreen(ST77XX_BLACK);
-            tft.setCursor(0, 0);
-            tft.println("MAX30102 not found!");
-            while (1);
-        }
-        HRSensor.setup(60, 4, 2, 100, 411, 4096);
-        HRSensor.setPulseAmplitudeRed(0x0A);
-        HRSensor.setPulseAmplitudeGreen(0);
-        initialized = true;
-    }
-    Serial.begin(115200);
-    delay(3000);
-    Serial.println("Initializing modules...");
-
-    // --- LCD ---
-    tft.init(240, 240);
-    tft.setRotation(2);
-    tft.fillScreen(ST77XX_BLACK);
-    tft.setTextColor(ST77XX_WHITE);
-    tft.setTextSize(2);
-
-    // --- Ultrasonic ---
-    pinMode(ECHO_PIN, INPUT);
-    pinMode(TRIG_PIN, OUTPUT);
-}
 
 void measureSPO2(uint8_t current_index) {
     redBuffer[current_index] = HRSensor.getRed();
@@ -97,20 +67,55 @@ void measureSPO2(uint8_t current_index) {
     HRSensor.nextSample();
 }
 
-static uint8_t index = 0;
+void setup() {
+    static bool initialized = false;
+  // Basic serial + display initialization first so we can show errors
+  Serial.begin(115200);
+  delay(300);
+  tft.init(240, 240);
+  tft.setRotation(2);
+  tft.fillScreen(ST77XX_BLACK);
+  tft.setTextColor(ST77XX_WHITE);
+  tft.setTextSize(2);
+  Serial.println("Initializing modules...");
+
+  // --- I2C / MAX30102 ---
+  if (!initialized) {
+    myWire.begin();
+    if (!HRSensor.begin(myWire, I2C_SPEED_STANDARD)) {
+      tft.fillScreen(ST77XX_BLACK);
+      tft.setCursor(0, 0);
+      tft.println("MAX30102 not found!");
+      while (1);
+    }
+    HRSensor.setup(0x1F, 4, 2, 100, 411, 4096);
+    HRSensor.setPulseAmplitudeRed(0x0A);
+    HRSensor.setPulseAmplitudeGreen(0);
+    initialized = true;
+  }
+
+  // --- Ultrasonic ---
+  pinMode(ECHO_PIN, INPUT);
+  pinMode(TRIG_PIN, OUTPUT);
+  digitalWrite(TRIG_PIN, LOW);
+
+  // initialize timing for speed calculation
+  lastMeasurementTime = millis();
+}
+
 void loop() {
-    measureSPO2(index);
-    if(index == BUFFER_LENGTH -1) {
-        index = 0;
+    measureSPO2(i);
+    if(i == BUFFER_LENGTH -1) {
+        i = 0;
         maxim_heart_rate_and_oxygen_saturation(irBuffer, BUFFER_LENGTH, redBuffer, &spo2, &validSPO2, &heartRate, &validHeartRate);
         Serial.println("HR:" + String(heartRate));
         Serial.println("SPO2" + String(spo2));
     } else {
-        index++;
+        i++;
     }
     unsigned long currentTime = millis();
     lastDistance = currentDistance;
     currentDistance = measureDistance();
-    Serial.print("Distance (cm): " + String(currentDistance) + " | Speed (cm/s): " + String(measureSpeed(lastDistance, currentDistance, (currentTime - lastMeasurementTime) / 1000.0)) );
+    Serial.println("Distance (cm): " + String(currentDistance) + " | Speed (cm/s): " + String(measureSpeed(lastDistance, currentDistance, (currentTime - lastMeasurementTime) / 1000.0)) );
     lastMeasurementTime = currentTime;
 }
