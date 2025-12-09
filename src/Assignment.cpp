@@ -59,9 +59,6 @@ float measureDistance() {
 }
 
 float measureSpeed(float oldDistance, float newDistance, float secondsInterval) {
-  if (secondsInterval <= 0) {
-    return 0; // Prevent division by zero
-  }
   return (newDistance - oldDistance) / secondsInterval; // cm/s positive values = approaching, negative = receding
 }
 
@@ -84,7 +81,6 @@ void collectSensorSample() {
       &heartRate, 
       &validHeartRate
     );
-  Serial.println("Computed SpO2 and Heart Rate");
   }
   HRSensor.nextSample(); 
 }
@@ -211,17 +207,16 @@ void loop() {
       float dt = (currentTime - lastMeasurementTime) / 1000.0;
       
       if (dt > 0) {
-        currentSpeed = measureSpeed(currentDistance, newDistance, dt);
-        float delta = abs(newDistance - currentDistance);
+        currentSpeed = measureSpeed(lastDistance, newDistance, dt);
+        float delta = abs(newDistance - lastDistance);
         
-        // Only update if change is significant (noise filtering)
         if (delta > 0.5 && delta < 100) { // Ignore noise and unrealistic jumps
           total_distance += delta;
         }
       }
-      
-      lastDistance = currentDistance;
+     
       currentDistance = newDistance;
+      lastDistance = newDistance;
       lastMeasurementTime = currentTime;
     }
   }
