@@ -6,17 +6,14 @@
 #include "heartRate.h"
 #include "spo2_algorithm.h"
 #include <math.h>
+#include <queue>
 
 #define TFT_CS D3
 #define TFT_RST D2
 #define TFT_DC D7
 Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
-
-// --- Ultrasonic Pins ---
 #define ECHO_PIN D0
 #define TRIG_PIN D1
-
-// --- MAX30102 PINS on I2C1 (SDA=D4, SCL=D5) ---
 MAX30105 HRSensor;
 TwoWire myWire(&i2c1_inst, D4, D5);
 
@@ -31,13 +28,12 @@ float currentSpeed = 0.0;
 
 // SpO2 calculation buffers
 #define BUFFER_LENGTH 100
-uint32_t irBuffer[BUFFER_LENGTH];
-uint32_t redBuffer[BUFFER_LENGTH];
+static queue<uint32_t>irBuffer;
+static queue<uint32_t>redBuffer;
 int32_t spo2 = 0;
 int8_t validSPO2 = 0;
 int32_t heartRate = 0;
 int8_t validHeartRate = 0;
-
 uint8_t bufferIndex = 0;
 bool bufferReady = false;
 unsigned long lastSensorRead = 0;
@@ -63,9 +59,8 @@ float measureSpeed(float oldDistance, float newDistance, float secondsInterval) 
 }
 
 
-void collectSensorSample() {
-  redBuffer[bufferIndex] = HRSensor.getRed();
-  irBuffer[bufferIndex] = HRSensor.getIR();
+void saveSensorSample(int ir, int red) {
+  redBuffer.add
   
   bufferIndex++;
 
@@ -196,7 +191,8 @@ void setup() {
 
 void loop() {
   unsigned long currentTime = millis();  
-  collectSensorSample();
+
+  saveSensorSample();
   
   if (currentTime - lastDistanceRead >= 50) { // Every 50ms
     lastDistanceRead = currentTime;
