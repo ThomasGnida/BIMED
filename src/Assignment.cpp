@@ -11,8 +11,6 @@
 #define TFT_RST D2
 #define TFT_DC D7
 Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
-
-// --- Ultrasonic Pins ---
 #define ECHO_PIN D0
 #define TRIG_PIN D1
 
@@ -42,6 +40,9 @@ uint8_t bufferIndex = 0;
 bool bufferReady = false;
 unsigned long lastSensorRead = 0;
 const unsigned long SENSOR_INTERVAL = 20;
+unsigned long lastHeartRateCalc = 0;
+const unsigned long HR_CALC_INTERVAL = 200;
+uint8_t bufferCount = 0; // Track how many valid samples we have
 
 float measureDistance() {
   digitalWrite(TRIG_PIN, LOW);
@@ -63,26 +64,33 @@ float measureSpeed(float oldDistance, float newDistance, float secondsInterval) 
 }
 
 
-void collectSensorSample() {
-  redBuffer[bufferIndex] = HRSensor.getRed();
-  irBuffer[bufferIndex] = HRSensor.getIR();
+bool collectSensorSample() {
+  uint32_t redValue = HRSensor.getRed();
+  uint32_t irValue = HRSensor.getIR();
   
-  bufferIndex++;
-
-  if (bufferIndex == BUFFER_LENGTH)  {
-    bufferIndex = 0;
-
-  maxim_heart_rate_and_oxygen_saturation(
-      irBuffer, 
-      BUFFER_LENGTH, 
-      redBuffer, 
-      &spo2, 
-      &validSPO2, 
-      &heartRate, 
-      &validHeartRate
-    );
+  HRSensor.nextSample();
+  
+  // Only save valid values (above 40000)
+  if (redValue > 40000 && irValue > 40000) {
+    // Use circular buffer - just overwrite at current index
+    redBuffer[bufferIndex] = redValue;
+    irBuffer[bufferIndex] = irValue;
+    
+    // Move to next index (wraps around when reaching 100)
+    bufferIndex = (bufferIndex + 1) % BUFFER_LENGTH;
+    
+    // Track how many valid samples we've collected
+    if (bufferCount < BUFFER_LENGTH) {
+      bufferCount++;
+      if (bufferCount == BUFFER_LENGTH) {
+        bufferReady = true;
+      }
+    }
+    
+    return true;
   }
-  HRSensor.nextSample(); 
+  
+  return false;
 }
 
 void updateDisplay() {
@@ -197,6 +205,21 @@ void setup() {
 void loop() {
   unsigned long currentTime = millis();  
   collectSensorSample();
+  
+  // Calculate HR and SpO2 every 200ms when buffer is full and ready
+  if (bufferReady && (currentTime - lastHeartRateCalc >= HR_CALC_INTERVAL)) {
+    lastHeartRateCalc = currentTime;
+    
+    maxim_heart_rate_and_oxygen_saturation(
+      irBuffer, 
+      BUFFER_LENGTH, 
+      redBuffer, 
+      &spo2, 
+      &validSPO2, 
+      &heartRate, 
+      &validHeartRate
+    );
+  }
   
   if (currentTime - lastDistanceRead >= 50) { // Every 50ms
     lastDistanceRead = currentTime;
