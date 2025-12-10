@@ -35,14 +35,14 @@ int32_t spo2 = 0;
 int8_t validSPO2 = 0;
 int32_t heartRate = 0;
 int8_t validHeartRate = 0;
+bool fingerDetected = false;
 
 uint8_t bufferIndex = 0;
 bool bufferReady = false;
-unsigned long lastSensorRead = 0;
-const unsigned long SENSOR_INTERVAL = 20;
-unsigned long lastHeartRateCalc = 0;
-const unsigned long HR_CALC_INTERVAL = 200;
-uint8_t bufferCount = 0; // Track how many valid samples we have
+uint32_t lastHeartRateCalc = 0;
+uint16_t HR_CALC_INTERVAL = 500;
+uint32_t lastDisplayUpdate = 0;
+
 
 float measureDistance() {
   digitalWrite(TRIG_PIN, LOW);
@@ -67,41 +67,22 @@ float measureSpeed(float oldDistance, float newDistance, float secondsInterval) 
 bool collectSensorSample() {
   uint32_t redValue = HRSensor.getRed();
   uint32_t irValue = HRSensor.getIR();
-  
   HRSensor.nextSample();
   
-  // Only save valid values (above 40000)
-  if (redValue > 40000 && irValue > 40000) {
-    // Use circular buffer - just overwrite at current index
+  if (redValue > 15000 && irValue > 15000) {
     redBuffer[bufferIndex] = redValue;
     irBuffer[bufferIndex] = irValue;
     
-    // Move to next index (wraps around when reaching 100)
-    bufferIndex = (bufferIndex + 1) % BUFFER_LENGTH;
-    
-    // Track how many valid samples we've collected
-    if (bufferCount < BUFFER_LENGTH) {
-      bufferCount++;
-      if (bufferCount == BUFFER_LENGTH) {
-        bufferReady = true;
-      }
+    if(!bufferReady & bufferIndex +1 == BUFFER_LENGTH){
+      bufferReady = true; //Arrays are filled for the first time
     }
-    
+    bufferIndex = (bufferIndex + 1) % BUFFER_LENGTH;
     return true;
   }
-  
   return false;
 }
 
 void updateDisplay() {
-    static unsigned long lastDisplayUpdate = 0;
-
-    if (millis() - lastDisplayUpdate < 500) { 
-        return;
-    }
-    Serial.print("Current Time: ");
-    Serial.print(millis());
-
     lastDisplayUpdate = millis();
 
     tft.fillScreen(ST77XX_BLACK);
@@ -109,7 +90,10 @@ void updateDisplay() {
     tft.setTextColor(ST77XX_WHITE);
 
     // Display HR and SpO2
-    if (validSPO2 && validHeartRate) {
+    if (!fingerDetected){
+        tft.setCursor(10, 20);
+        tft.println("No finger detected");
+    } else if (validSPO2 && validHeartRate) {
         tft.setCursor(10, 20);
         tft.print("  HR: ");
         tft.print(heartRate);
@@ -120,15 +104,9 @@ void updateDisplay() {
         tft.print(spo2);
         tft.println(" %");
 
-        Serial.print(", HR: ");
-        Serial.print(heartRate);
-        Serial.print(" bpm, SpO2: ");
-        Serial.print(spo2);
-        Serial.print("%");
     } else {
         tft.setCursor(10, 20);
-        tft.println("Place finger");
-        Serial.print(", No finger");
+        tft.println("Invalid HR/Spo2 values");
     }
 
     // Display Distance
@@ -138,12 +116,8 @@ void updateDisplay() {
         tft.print(currentDistance, 1);
         tft.println(" cm");
 
-        Serial.print(", Dist: ");
-        Serial.print(currentDistance, 1);
-        Serial.print(" cm");
     } else {
         tft.println("Dist: --");
-        Serial.print(", Dist: --");
     }
 
     // Display Speed
@@ -152,22 +126,14 @@ void updateDisplay() {
     tft.print(currentSpeed, 1);
     tft.println(" cm/s");
 
-    Serial.print(", Speed: ");
-    Serial.print(currentSpeed, 1);
-    Serial.print(" cm/s");
-
     tft.setCursor(10, 160);
     tft.print("Total Dist: ");
     tft.print(total_distance, 2); // convert to meters
     tft.println(" cm");
-
-    Serial.print(", Total Dist: ");
-    Serial.print(total_distance, 2);
-    Serial.println(" cm");
 }
 
 void setup() {
-    static bool initialized = false;
+  static bool initialized = false;
   // Basic serial + display initialization first so we can show errors
   Serial.begin(115200);
   delay(300);
@@ -187,7 +153,7 @@ void setup() {
       tft.println("MAX30102 not found!");
       while (1);
     }
-    HRSensor.setup(0x2F, 4, 2, 100, 411, 4096);
+    HRSensor.setup(0x2F, 4, 2, 50, 411, 4096);
     HRSensor.setPulseAmplitudeRed(0x1A);
     HRSensor.setPulseAmplitudeGreen(0);
     initialized = true;
@@ -199,14 +165,13 @@ void setup() {
   digitalWrite(TRIG_PIN, LOW);
 
   lastMeasurementTime = millis();
-  lastSensorRead = millis();
 }
 
 void loop() {
   unsigned long currentTime = millis();  
-  collectSensorSample();
+  fingerDetected = collectSensorSample();
   
-  // Calculate HR and SpO2 every 200ms when buffer is full and ready
+  // Calculate HR and SpO2 every 500ms when buffer is full and ready
   if (bufferReady && (currentTime - lastHeartRateCalc >= HR_CALC_INTERVAL)) {
     lastHeartRateCalc = currentTime;
     
@@ -221,20 +186,20 @@ void loop() {
     );
   }
   
-  if (currentTime - lastDistanceRead >= 50) { // Every 50ms
+  if (currentTime - lastDistanceRead >= 100) { // Every 100ms
     lastDistanceRead = currentTime;
     
     float newDistance = measureDistance();
     
     if (newDistance >= 0.0) {
-      float dt = (currentTime - lastMeasurementTime) / 1000.0;
+      float timeDifference = (currentTime - lastMeasurementTime) / 1000.0;
       
-      if (dt > 0) {
-        currentSpeed = measureSpeed(lastDistance, newDistance, dt);
-        float delta = abs(newDistance - lastDistance);
+      if (timeDifference > 0) {
+        currentSpeed = measureSpeed(lastDistance, newDistance, timeDifference);
+        float distanceDelta = abs(newDistance - lastDistance);
         
-        if (delta > 0.5 && delta < 100) { // Ignore noise and unrealistic jumps
-          total_distance += delta;
+        if (distanceDelta > 0.5 && distanceDelta < 100) { // Ignore noise and unrealistic jumps
+          total_distance += distanceDelta;
         }
       }
      
@@ -243,7 +208,9 @@ void loop() {
       lastMeasurementTime = currentTime;
     }
   }
-  
-  // Update display
-  updateDisplay();
+
+  if (currentTime - lastDisplayUpdate >= 500) { 
+    lastDisplayUpdate = currentTime;
+    updateDisplay();
+  }
 }
